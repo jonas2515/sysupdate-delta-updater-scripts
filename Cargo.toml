@@ -1,0 +1,11 @@
+[package]
+name = "sysupdate-delta-updater-scripts"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "get_delta_info"
+path = "src/get_delta_info/main.rs"
+
+[dependencies]
+crc-fast = "1.8.0"
