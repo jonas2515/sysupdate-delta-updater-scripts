@@ -5,7 +5,7 @@ project.
 
 Since I'm new to Rust, this is also my personal playground for learning Rust.
 
-## Tools that are currently in this repo:
+## Tools in this repo
 
 - get_delta_info: A tool to look at two erofs images and determine the similarities
 between the blocks of those images: 4 KiB blocks of both images are hashed and compared,
@@ -20,3 +20,10 @@ in  the future.
 - dump_delta_manifest: Read and print the information encoded in a delta-update manifest
 created using create_delta_manifest. Used to iterate on the manifest format and
 potentially for tests in the future.
+
+- update_image: Create/Update an existing image using deltas, passing in the old
+image, a delta-update manifest, and a new image.
+
+- update_image_downloading: Create/Update an existing image using deltas, passing
+in the (local) old image, a (remote) delta-update manifest, and a (remote) new image
+to take the deltas from.
