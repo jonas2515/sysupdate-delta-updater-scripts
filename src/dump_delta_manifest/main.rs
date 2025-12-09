@@ -1,9 +1,6 @@
-use std::fs::{File};
 use std::env;
 use std::process;
 use std::error::Error;
-use std::io::Read;
-use gvariant::{gv, Marker, Structure, aligned_bytes::copy_to_align};
 
 use sysupdate_delta_updater_scripts::delta_manifest;
 
@@ -17,8 +14,12 @@ fn dump_manifest(manifest_filename: &str) -> Result<(), Box<dyn Error>> {
     let manifest = delta_manifest::read_manifest(manifest_filename)?;
 
     println!("version: {:?}", manifest.version);
-    println!("salt: {:?}", manifest.verity_salt);
-    println!("sha256hash of image: {:?}", manifest.image_hash);
+    print!("salt: ");
+    for byte in manifest.verity_salt { print!("{:x}", byte); }
+    print!("\n");
+    print!("sha256hash of image: ");
+    for byte in manifest.image_hash { print!("{:x}", byte); }
+    print!("\n");
     println!("number of hash blocks: {}", manifest.block_hashes.len());
 
     Ok(())
