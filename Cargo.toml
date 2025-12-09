@@ -19,7 +19,12 @@ path = "src/dump_delta_manifest/main.rs"
 name = "update_image"
 path = "src/update_image/main.rs"
 
+[[bin]]
+name = "update_image_downloading"
+path = "src/update_image_downloading/main.rs"
+
 [dependencies]
+bytes = "1.11.0"
 crc-fast = "1.8.0"
 curl = "0.4.49"
 env_logger = "0.11.8"
