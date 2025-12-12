@@ -44,8 +44,5 @@ reqwest = { version = "0.12.24", features = ["rustls-tls", "stream"] }
 serde = "1.0.228"
 tokio = { version = "1.48.0", features = ["full"] }
 zlink = "0.2.0"
-libcryptsetup-rs = "0.14.0"
+libcryptsetup-rs = { version = "0.14.0", git = "https://github.com/jonas2515/libcryptsetup-rs", branch = "allow-passing-none" }
 uuid = "1.19.0"
-
-[patch.crates-io]
-libcryptsetup-rs = { path = "../libcryptsetup-rs" }
