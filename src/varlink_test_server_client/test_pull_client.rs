@@ -9,7 +9,7 @@ use std::{
     process,
 };
 
-const SOCKET_PATH: &str = "/run/pull_worker/pull_worker.varlink";
+const SOCKET_PATH: &str = "/run/systemd/io.systemd.PullWorker/delta+https";
 
 /// Proxy trait for calling methods on the interface.
 #[proxy("io.systemd.PullWorker")]

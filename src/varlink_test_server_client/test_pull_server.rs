@@ -21,7 +21,7 @@ use libcryptsetup_rs::{
 };
 use uuid::Uuid;
 
-const SOCKET_PATH: &str = "/run/pull_worker/pull_worker.varlink";
+const SOCKET_PATH: &str = "/run/systemd/io.systemd.PullWorker/delta+https";
 
 // To test running the thing with minimal permissions, copy it to /opt/, then run with systemd-run
 // sudo systemd-run -p ProtectSystem=strict -p NoNewPrivileges=yes -p CapabilityBoundingSet= -p ReadOnlyPaths=/ -p DynamicUser=yes -p ProtectHome=yes -p PrivateTmp=yes -p PrivateMounts=yes -p PrivateDevices=yes -p PrivateUsers=yes -p RuntimeDirectory=pull_worker/ -p RestrictAddressFamilies="AF_UNIX" -p IPAddressDeny=any -p PrivateNetwork=yes -p ProtectHostname=yes -p ProtectClock=yes -p ProtectKernelModules=yes  -p ProtectKernelLogs=yes  -p ProtectControlGroups=yes  -p RestrictNamespaces=yes -p LockPersonality=yes -p MemoryDenyWriteExecute=yes -p RestrictRealtime=yes -p RestrictSUIDSGID=yes -p RemoveIPC=yes -p SystemCallFilter= -p SystemCallFilter="~@clock @module @mount @obsolete @raw-io @reboot @resources @swap @privileged @debug" -p SystemCallArchitectures=native -p SystemCallErrorNumber=EPERM -p ProtectKernelTunables=yes -p ProtectProc=invisible -p ProcSubset=pid -p UMask=0000 --wait -v /opt/test_pull_server
