@@ -53,7 +53,7 @@ fn update_image(
     let new_image_file = File::open(new_image)?;
 
     for (target_block_num, source_block_num) in blocks_to_update.iter().enumerate() {
-        if *source_block_num == 0 {
+        if *source_block_num == u64::MAX {
             copy_block(
                 &new_image_file,
                 target_block_num as u64,

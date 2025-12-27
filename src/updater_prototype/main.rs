@@ -194,7 +194,7 @@ async fn update_image(
     let mut downloads = Vec::new();
 
     for (target_block_num, source_block_num) in blocks_to_update.iter().enumerate() {
-        if *source_block_num == 0 {
+        if *source_block_num == u64::MAX {
             if n_chunks_cur_download == 0 {
                 begin_block_cur_download = target_block_num;
                 n_chunks_cur_download = 1;
@@ -227,7 +227,7 @@ async fn update_image(
     */
 
     for (target_block_num, source_block_num) in blocks_to_update.iter().enumerate() {
-        if *source_block_num != 0 {
+        if *source_block_num != u64::MAX {
             copy_block(
                 &old_image_file,
                 old_image_offset_bytes,

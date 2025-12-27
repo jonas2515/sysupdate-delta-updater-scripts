@@ -170,7 +170,7 @@ pub fn get_new_to_old_block_mapping(
             new_blocks_to_old_blocks.push(*block_num_in_old_image as u64);
             n_blocks_avail_in_old_image += 1;
         } else {
-            new_blocks_to_old_blocks.push(0);
+            new_blocks_to_old_blocks.push(u64::MAX);
         }
     }
 
