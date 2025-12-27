@@ -1,10 +1,10 @@
-use std::fs::{File};
-use std::io::{self, Read};
-use std::env;
-use std::process;
-use std::error::Error;
+use crc_fast::{CrcAlgorithm::Crc64Nvme, checksum};
 use std::collections::HashMap;
-use crc_fast::{checksum, CrcAlgorithm::Crc64Nvme};
+use std::env;
+use std::error::Error;
+use std::fs::File;
+use std::io::{self, Read};
+use std::process;
 
 const BLOCK_SIZE: usize = 4096;
 
@@ -31,19 +31,28 @@ fn read_image(filename: &str) -> Result<(usize, HashMap<u64, usize>), io::Error>
 
         let block_hash = checksum(Crc64Nvme, &buffer[..bytes_read]);
         if hashes_to_block_num.contains_key(&block_hash) {
-            panic!("collision in same file found while hashing, block_num {}", block_num);
+            panic!(
+                "collision in same file found while hashing, block_num {}",
+                block_num
+            );
         }
 
         hashes_to_block_num.insert(block_hash, block_num);
 
         if total_bytes_read % (1024 * 1024 * 100) == 0 {
-            println!("status: read {} MiB of file={}",
-                     total_bytes_read / (1024 * 1024), filename);
+            println!(
+                "status: read {} MiB of file={}",
+                total_bytes_read / (1024 * 1024),
+                filename
+            );
         }
     }
 
-    println!("Finished reading: file={}, total_bytes_read={} MiB",
-             filename, total_bytes_read / (1024 * 1024));
+    println!(
+        "Finished reading: file={}, total_bytes_read={} MiB",
+        filename,
+        total_bytes_read / (1024 * 1024)
+    );
 
     Ok((total_bytes_read, hashes_to_block_num))
 }
@@ -79,16 +88,28 @@ fn print_delta_information(image_from: &str, image_to: &str) -> Result<(), Box<d
     let percent_in_same_position = n_blocks_at_same_position as f32 / n_blocks_image_to as f32;
 
     println!("Finished comparing files");
-    println!("n_blocks_matching={}, n_blocks_not_matching={}, percent_matching={}",
-             n_blocks_matching, n_blocks_not_matching, percent_matching);
-    println!("n_blocks_at_same_position={}, percent_in_same_position={}",
-             n_blocks_at_same_position, percent_in_same_position);
-    println!("total_bytes_read_image_from={} ({} MiB), total_bytes_read_image_to={} ({} MiB)",
-             total_bytes_read_image_from, total_bytes_read_image_from / (1024 * 1024),
-             total_bytes_read_image_to, total_bytes_read_image_to / (1024 * 1024));
-    println!("n_blocks_image_from={} ({} MiB), n_blocks_image_to={} ({} MiB)",
-             n_blocks_image_from, (n_blocks_image_from * BLOCK_SIZE) / (1024 * 1024),
-             n_blocks_image_to, (n_blocks_image_to * BLOCK_SIZE) / (1024 * 1024));
+    println!(
+        "n_blocks_matching={}, n_blocks_not_matching={}, percent_matching={}",
+        n_blocks_matching, n_blocks_not_matching, percent_matching
+    );
+    println!(
+        "n_blocks_at_same_position={}, percent_in_same_position={}",
+        n_blocks_at_same_position, percent_in_same_position
+    );
+    println!(
+        "total_bytes_read_image_from={} ({} MiB), total_bytes_read_image_to={} ({} MiB)",
+        total_bytes_read_image_from,
+        total_bytes_read_image_from / (1024 * 1024),
+        total_bytes_read_image_to,
+        total_bytes_read_image_to / (1024 * 1024)
+    );
+    println!(
+        "n_blocks_image_from={} ({} MiB), n_blocks_image_to={} ({} MiB)",
+        n_blocks_image_from,
+        (n_blocks_image_from * BLOCK_SIZE) / (1024 * 1024),
+        n_blocks_image_to,
+        (n_blocks_image_to * BLOCK_SIZE) / (1024 * 1024)
+    );
 
     Ok(())
 }
@@ -102,7 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let image_to = &args[2];
 
             print_delta_information(image_from, image_to)
-        },
+        }
         _ => {
             help();
             process::exit(1)

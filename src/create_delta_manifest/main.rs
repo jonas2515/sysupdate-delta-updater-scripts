@@ -1,16 +1,18 @@
-use std::fs::{File};
-use std::io::{self, Read};
+use gvariant::{Marker, gv};
 use std::env;
-use std::process;
 use std::error::Error;
-use gvariant::{gv, Marker};
+use std::fs::File;
+use std::io::{self, Read};
+use std::process;
 
 use sysupdate_delta_updater_scripts::delta_manifest;
 
 fn help() {
-    println!("usage: create_delta_manifest <image>
+    println!(
+        "usage: create_delta_manifest <image>
 
-Create a delta update manifest for the image file <image>.");
+Create a delta update manifest for the image file <image>."
+    );
 }
 
 fn generate_salt() -> Result<[u8; 32], io::Error> {
@@ -62,7 +64,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let manifest_filename = image.to_string() + ".manifest";
 
             create_manifest(image, manifest_filename.as_str())
-        },
+        }
         _ => {
             help();
             process::exit(1)

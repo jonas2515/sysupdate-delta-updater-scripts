@@ -1,25 +1,13 @@
 #![allow(non_snake_case)]
 
-use serde::{Deserialize, Serialize};
-use zlink::{unix, ReplyError, Reply, Listener};
-use std::{
-    io,
-    io::Read,
-    path::PathBuf,
-    fs::File,
-    os::fd::IntoRawFd,
-    env,
-    process,
-};
 use libcryptsetup_rs::{
-    consts::{
-        flags::CryptVerity,
-        vals::EncryptionFormat,
-        vals::CryptDebugLevel,
-    },
-    CryptInit,  CryptParamsVerity, CryptParamsVerityRef,
+    CryptInit, CryptParamsVerity, CryptParamsVerityRef,
+    consts::{flags::CryptVerity, vals::CryptDebugLevel, vals::EncryptionFormat},
 };
+use serde::{Deserialize, Serialize};
+use std::{env, fs::File, io, io::Read, os::fd::IntoRawFd, path::PathBuf, process};
 use uuid::Uuid;
+use zlink::{Listener, Reply, ReplyError, unix};
 
 const SOCKET_PATH: &str = "/run/pull_worker/pull_worker.varlink";
 
@@ -83,7 +71,7 @@ enum PullWorkerMethod<'a> {
         offset: Option<i64>,
         maxSize: Option<i64>,
         subvolume: Option<bool>,
-    }
+    },
 }
 
 fn generate_salt() -> Result<[u8; 32], io::Error> {
@@ -97,11 +85,13 @@ fn generate_salt() -> Result<[u8; 32], io::Error> {
 }
 
 fn help() {
-    println!("usage: test_pull_server
+    println!(
+        "usage: test_pull_server
 
 Spawn a io.systemd.PullWorker varlink server that creates dm-verity data for an
 image (using an offset for the verity data) passed via io.systemd.PullWorker.Pull()
-method.");
+method."
+    );
 }
 
 async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
@@ -128,11 +118,21 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
             offset,
             #[allow(non_snake_case)]
             maxSize,
-            subvolume
+            subvolume,
         } => {
-            println!("Pull() method call version={}, mode={:?}, fsync={}, verify={:?}, checksum={:?}, source={}, instances={:?}, offset={:?}, maxSize={:?}, subvolume={:?}",
-                version, mode, fsync, verify, checksum, source, instances,
-                offset, maxSize, subvolume);
+            println!(
+                "Pull() method call version={}, mode={:?}, fsync={}, verify={:?}, checksum={:?}, source={}, instances={:?}, offset={:?}, maxSize={:?}, subvolume={:?}",
+                version,
+                mode,
+                fsync,
+                verify,
+                checksum,
+                source,
+                instances,
+                offset,
+                maxSize,
+                subvolume
+            );
 
             if offset.is_none_or(|o| o < 0) {
                 println!("Passing offset is required");
@@ -166,14 +166,13 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
 
                 let mut params_ref: CryptParamsVerityRef = (&params).try_into()?;
                 let mut device = CryptInit::init(&hash_device_path)?;
-                device
-                    .context_handle()
-                    .format::<CryptParamsVerityRef>(
-                        EncryptionFormat::Verity,
-                        ("", ""), // cipher and mode
-                        Some(Uuid::new_v4()), // verity partition uuid
-                        libcryptsetup_rs::Either::Left(&[]), // volume key
-                        Some(&mut params_ref))?;
+                device.context_handle().format::<CryptParamsVerityRef>(
+                    EncryptionFormat::Verity,
+                    ("", ""),                            // cipher and mode
+                    Some(Uuid::new_v4()),                // verity partition uuid
+                    libcryptsetup_rs::Either::Left(&[]), // volume key
+                    Some(&mut params_ref),
+                )?;
 
                 println!("aslihgislaghisg");
                 Ok(Reply::new(None))
@@ -183,8 +182,12 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
 
     // Send our method reply or error out over the socket
     match reply {
-        Ok(reply) => { write_conn.send_reply(&reply, Vec::new()).await?; },
-        Err(error) => { write_conn.send_error(&error, Vec::new()).await?; }
+        Ok(reply) => {
+            write_conn.send_reply(&reply, Vec::new()).await?;
+        }
+        Err(error) => {
+            write_conn.send_error(&error, Vec::new()).await?;
+        }
     }
 
     Ok(())
@@ -195,9 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
     match args.len() {
-        1 => {
-            run_server().await
-        },
+        1 => run_server().await,
         _ => {
             help();
             process::exit(1)

@@ -1,13 +1,9 @@
 #![allow(non_snake_case)]
 
 use serde::{Deserialize, Serialize};
-use zlink::{proxy, unix, ReplyError};
-use std::{
-    fs::File,
-    os::fd::OwnedFd,
-    env,
-    process,
-};
+use std::fs::OpenOptions;
+use std::{env, fs::File, os::fd::OwnedFd, process};
+use zlink::{ReplyError, proxy, unix};
 
 const SOCKET_PATH: &str = "/run/pull_worker/pull_worker.varlink";
 

@@ -1,20 +1,21 @@
-use std::fs::{File};
-use std::error::Error;
-use std::collections::HashMap;
-use std::io;
-use std::io::{Read, Seek};
-use gvariant::{gv, Marker, Structure, aligned_bytes::copy_to_align};
-use crc_fast::{checksum, CrcAlgorithm::Crc64Nvme};
 use bytes::Bytes;
+use crc_fast::{CrcAlgorithm::Crc64Nvme, checksum};
+use gvariant::{Marker, Structure, aligned_bytes::copy_to_align, gv};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io;
+use std::io::SeekFrom;
+use std::io::{Read, Seek};
 use std::process::Command;
 
 pub const BLOCK_SIZE: usize = 4096;
 
 pub struct Manifest {
-  pub version: u32,           /* manifest version */
-  pub verity_salt: [u8; 32],  /* salt to use for dm-verity */
-  pub image_hash: [u8; 32],   /* sha256 hash of the image (unsalted) */
-  pub block_hashes: Vec<u64>,  /* block hashes crc64 */
+    pub version: u32,           /* manifest version */
+    pub verity_salt: [u8; 32],  /* salt to use for dm-verity */
+    pub image_hash: [u8; 32],   /* sha256 hash of the image (unsalted) */
+    pub block_hashes: Vec<u64>, /* block hashes crc64 */
 }
 
 fn check_manifest_version(manifest_version: &[u8]) -> Result<(), Box<dyn Error>> {
@@ -22,7 +23,7 @@ fn check_manifest_version(manifest_version: &[u8]) -> Result<(), Box<dyn Error>>
     let buffer = copy_to_align(manifest_version);
     let manifest_version = gv!("u").cast(&buffer);
     if *manifest_version != 1 {
-        return Err(format!("Unsupported manifest version: {}", manifest_version).into())
+        return Err(format!("Unsupported manifest version: {}", manifest_version).into());
     }
 
     Ok(())
@@ -36,7 +37,7 @@ pub fn read_manifest(manifest_filename: &str) -> Result<Manifest, Box<dyn Error>
     let mut buffer = [0u8; 4];
     let bytes_read = manifest_file.read(&mut buffer)?;
     if bytes_read != 4 {
-        return Err("Failed to read manifest version".into())
+        return Err("Failed to read manifest version".into());
     }
     check_manifest_version(&buffer)?;
 
@@ -90,13 +91,19 @@ pub fn read_image_block_hashes(filename: &str) -> Result<Vec<u64>, io::Error> {
         blocks_to_hashes.push(block_hash);
 
         if total_bytes_read % (1024 * 1024 * 100) == 0 {
-            println!("status: read {} MiB of file={}",
-                     total_bytes_read / (1024 * 1024), filename);
+            println!(
+                "status: read {} MiB of file={}",
+                total_bytes_read / (1024 * 1024),
+                filename
+            );
         }
     }
 
-    println!("Finished reading: file={}, total_bytes_read={} MiB",
-             filename, total_bytes_read / (1024 * 1024));
+    println!(
+        "Finished reading: file={}, total_bytes_read={} MiB",
+        filename,
+        total_bytes_read / (1024 * 1024)
+    );
 
     Ok(blocks_to_hashes)
 }
@@ -115,7 +122,10 @@ pub fn hashes_to_blocks_map_from_block_hashes(block_hashes: Vec<u64>) -> HashMap
 // and the value is either:
 // 0: in case the block is not present in the old_image
 // or otherwise, it's the block num in the old_image
-pub fn get_new_to_old_block_mapping(old_image_hashes_to_blocks: HashMap<u64, usize>, new_image_blocks_to_hashes: Vec<u64>) -> (usize, Vec<u64>) {
+pub fn get_new_to_old_block_mapping(
+    old_image_hashes_to_blocks: HashMap<u64, usize>,
+    new_image_blocks_to_hashes: Vec<u64>,
+) -> (usize, Vec<u64>) {
     let mut new_blocks_to_old_blocks: Vec<u64> = Vec::new();
     let mut n_blocks_avail_in_old_image = 0;
 
@@ -140,5 +150,9 @@ pub fn measure_sha256sum(filename: &str) -> Result<[u8; 32], Box<dyn Error>> {
         .arg(filename)
         .output()?;
 
-    Ok(cmd_out.stdout.get(..).ok_or("arr out of bounds")?.try_into()?)
+    Ok(cmd_out
+        .stdout
+        .get(..)
+        .ok_or("arr out of bounds")?
+        .try_into()?)
 }
