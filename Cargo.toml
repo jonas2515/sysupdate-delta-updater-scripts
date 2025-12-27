@@ -31,6 +31,10 @@ path = "src/varlink_test_server_client/test_pull_server.rs"
 name = "test_pull_client"
 path = "src/varlink_test_server_client/test_pull_client.rs"
 
+[[bin]]
+name = "updater_prototype"
+path = "src/updater_prototype/main.rs"
+
 [dependencies]
 bytes = "1.11.0"
 crc-fast = "1.8.0"
@@ -46,6 +50,7 @@ tokio = { version = "1.48.0", features = ["full"] }
 zlink = "0.2.0"
 libcryptsetup-rs = "0.14.0"
 uuid = "1.19.0"
+sha2 = { version = "0.10.9", features = ["asm-aarch64", "asm"] }
 
 [patch.crates-io]
 libcryptsetup-rs = { path = "../libcryptsetup-rs" }

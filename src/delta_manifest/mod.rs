@@ -108,6 +108,42 @@ pub fn read_image_block_hashes(filename: &str) -> Result<Vec<u64>, io::Error> {
     Ok(blocks_to_hashes)
 }
 
+pub fn read_image_block_hashes_from_file(
+    mut image: &File,
+    offset: usize,
+    size: usize,
+) -> Result<Vec<u64>, io::Error> {
+    let mut buffer = [0; BLOCK_SIZE];
+    let mut total_bytes_read = 0;
+    let mut blocks_to_hashes = Vec::new();
+
+    image.seek(SeekFrom::Start(offset as u64))?;
+    let mut image_take = image.take(size as u64);
+
+    loop {
+        let bytes_read = image_take.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        total_bytes_read += bytes_read;
+
+        let block_hash = checksum(Crc64Nvme, &buffer[..bytes_read]);
+        blocks_to_hashes.push(block_hash);
+
+        if total_bytes_read % (1024 * 1024 * 100) == 0 {
+            println!("status: read {} MiB", total_bytes_read / (1024 * 1024));
+        }
+    }
+
+    println!(
+        "Finished reading: total_bytes_read={} MiB",
+        total_bytes_read / (1024 * 1024)
+    );
+
+    Ok(blocks_to_hashes)
+}
+
 pub fn hashes_to_blocks_map_from_block_hashes(block_hashes: Vec<u64>) -> HashMap<u64, usize> {
     let mut hashes_to_blocks = HashMap::new();
 
