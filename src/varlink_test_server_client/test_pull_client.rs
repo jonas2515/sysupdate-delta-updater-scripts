@@ -5,7 +5,7 @@ use std::fs::OpenOptions;
 use std::{env, fs::File, os::fd::OwnedFd, process};
 use zlink::{ReplyError, proxy, unix};
 
-const SOCKET_PATH: &str = "/run/pull_worker/pull_worker.varlink";
+const SOCKET_PATH: &str = "/run/systemd/io.systemd.PullWorker/https+delta";
 
 /// Proxy trait for calling methods on the interface.
 #[proxy("io.systemd.PullWorker")]
@@ -69,36 +69,52 @@ pub enum PullWorkerError {
 }
 
 fn help() {
-    println!("usage: test_pull_client <image_to_update> <source_url>
+    println!(
+        "usage: test_pull_client <old_image> <image_to_update> <source_url>
 
-Call the io.systemd.PullWorker.Pull() method via varlink, sending <image_to_update>
-as destinationFileDescriptor and <source_url> as source.");
+Call the io.systemd.PullWorker.Pull() method via varlink, using <old_image> as
+the existing image, sending <image_to_update> as destinationFileDescriptor,
+and <source_url> as source URL for the image."
+    );
 }
 
-async fn call_pull(image_to_update: &str, source_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn call_pull(
+    old_image: &str,
+    image_to_update: &str,
+    source_url: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut conn = unix::connect(SOCKET_PATH).await?;
 
-    let data_file = File::open(image_to_update)?;
-    let data_file_fd: OwnedFd = data_file.into();
+    let old_image_file = File::open(old_image)?;
+    let old_image_fd: OwnedFd = old_image_file.into();
+
+    let image_to_update_file = OpenOptions::new()
+        .write(true)
+        .read(true)
+        .open(image_to_update)?;
+    let image_to_update_fd: OwnedFd = image_to_update_file.into();
 
     let pull_instance = PullInstance {
         version: "v1".to_string(),
         location: "location".to_string(),
     };
 
-    let _result = conn.pull(
-        "v2", // version
-        &RemoteType::Raw, // mode
-        false, // fsync
-        &ImageVerify::No, // verify
-        Some("checksum"), // checksum
-        source_url, // source
-        Vec::from([data_file_fd]), // destination_file_descriptor
-        Some(&[pull_instance]), // instances
-        Some(4096 * 100), // offset
-        Some(4096 * 100), // max_size
-        None, // subvolume
-    ).await?.unwrap();
+    let _result = conn
+        .pull(
+            "v2",                                                                     // version
+            &RemoteType::Raw,                                                         // mode
+            true,                                                                     // fsync
+            &ImageVerify::Checksum,                                                   // verify
+            Some("279a9bd7f4d36c5dcb7238f3ca377050c5d564ff4a46772109613bebf11acd3d"), // checksum
+            source_url,                                                               // source
+            Vec::from([image_to_update_fd, old_image_fd]), // destination_file_descriptor
+            Some(&[pull_instance]),                        // instances
+            None,                                          // offset in the FD
+            Some(4096 * 2000000),                          // max_size, 7.8 GiB
+            None,                                          // subvolume
+        )
+        .await?
+        .unwrap();
 
     println!("Successfully called Pull()");
 
@@ -110,12 +126,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
     match args.len() {
-        3 => {
-            let image_to_update = &args[1];
-            let source_url = &args[2];
+        4 => {
+            let old_image = &args[1];
+            let image_to_update = &args[2];
+            let source_url = &args[3];
 
-            call_pull(image_to_update, source_url).await
-        },
+            call_pull(old_image, image_to_update, source_url).await
+        }
         _ => {
             help();
             process::exit(1)
