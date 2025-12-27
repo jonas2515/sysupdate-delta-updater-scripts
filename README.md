@@ -27,3 +27,11 @@ image, a delta-update manifest, and a new image.
 - update_image_downloading: Create/Update an existing image using deltas, passing
 in the (local) old image, a (remote) delta-update manifest, and a (remote) new image
 to take the deltas from.
+
+- varlink_test_server_client: A minimal varlink server and client using zlink in order
+to prototype passing FDs via varlink and opening them on the varlink server side. The
+varlink server then uses libcryptsetup-rs to create the dm-verity data for a given disk
+image that was passed in as a FD. Also useful to test the varlink server in a
+locked-down environment, as that's what we'll be working with as an actual sysupdate
+pull backend later. For a systemd-run command to lock down the environment, see
+test_pull_server.rs.
