@@ -220,7 +220,7 @@ fn create_verity_image(
 ) -> Result<[u8; 32], Box<dyn Error>> {
     let mut salt_string = String::new();
     for byte in verity_salt {
-        salt_string.push_str(&format!("{:x}", byte));
+        salt_string.push_str(&format!("{:02x}", byte));
     }
 
     let cmd_out = Command::new("veritysetup")
@@ -313,7 +313,7 @@ fn delta_update_image(
     )?;
     print!("dm-verity root hash: ");
     for byte in root_hash {
-        print!("{:x}", byte);
+        print!("{:02x}", byte);
     }
     print!("\n");
 
