@@ -4,7 +4,9 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{self, Read};
 use std::process;
-
+use serde::{Deserialize, Serialize};
+use zvariant::{serialized::Context, to_writer, to_bytes, Type, LE};
+use std::io::Write;
 use sysupdate_delta_updater_scripts::delta_manifest;
 
 fn help() {
@@ -37,13 +39,25 @@ fn create_manifest(image: &str, manifest_filename: &str) -> Result<(), Box<dyn E
 
     let manifest = delta_manifest::Manifest {
         version: 1,
-        verity_salt: salt,
-        image_hash: sha256sum,
+        verity_salt: salt.to_vec(),
+        image_hash: sha256sum.to_vec(),
         block_hashes: block_hashes,
     };
 
+
+
     let mut manifest_file = File::create(manifest_filename)?;
-    let manifest_as_tuple = (
+
+ let ctxt = Context::new_gvariant(LE, 0);
+
+// SAFETY: No FDs are being serialized here so its completely safe.
+unsafe { to_writer(&mut manifest_file, ctxt, &manifest) }?;
+//let encoded = to_bytes(ctxt, &manifest).unwrap();
+//manifest_file.write_all(encoded.bytes())?;
+
+
+manifest_file.flush()?;
+/*    let manifest_as_tuple = (
         manifest.version,
         manifest.verity_salt,
         manifest.image_hash,
@@ -51,7 +65,7 @@ fn create_manifest(image: &str, manifest_filename: &str) -> Result<(), Box<dyn E
     );
 
     gv!("(uayayat)").serialize(&manifest_as_tuple, &mut manifest_file)?;
-
+*/
     Ok(())
 }
 

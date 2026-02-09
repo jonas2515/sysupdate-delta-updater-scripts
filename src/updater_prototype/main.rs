@@ -85,7 +85,8 @@ async fn download_blocks_multipart(
 
     let response = client.get(url).header("Range", header).send().await?;
     if !response.status().is_success() {
-        return Err("Delta download failed".into());
+        let code = response.status();
+        return Err(format!("Delta download failed (HTTP status: {code})").into());
     }
 
     let content_type_header = response
@@ -139,6 +140,7 @@ async fn download_blocks_multipart(
                 return Err("Too many bytes received in download".into());
             }
 
+            //tokio::spawn(target.write_all(&*b));
             target.write_all(&*b)?;
         }
     } else {
@@ -149,7 +151,7 @@ async fn download_blocks_multipart(
 }
 
 async fn download_blocks_in_thread(
-    target: File,
+    target: &File,
     downloads: Vec<(usize, u64)>,
     url: String,
 ) -> Result<(), std::io::Error> {
@@ -213,11 +215,28 @@ async fn update_image(
         downloads.push((begin_block_cur_download, n_chunks_cur_download));
     }
 
-    println!("Now downloading deltas and copying blocks");
+    println!("Now copying unchanged blocks");
 
-    // FIXME: this doesn't work because it tries to write to the file from both
-    // the download thread and the copy in the main thread at the same time.
-    // We need to use mutexes somehow to sync the write operations.
+    // TODO: There's potential for optimization here by parallelizing writing
+    // to disk and downloading. Ideally we'd start downloading right now, and
+    // copy from old to new image at the same time. Also ideally writing
+    // downloaded data to disk would not block downloading, this would get
+    // trickier though, because then we start caching downloaded data in memory,
+    // and we should probably keep the amount of memory used low.
+    // The former can fairly easily be achieved by putting downloading into a
+    // thread and making writing to the FD from main vs download thread
+    // exclusive using mutexes.
+    // The latter not so easy, likely the downloaded buffer is going to be
+    // reused and we can't just hand ownership over to some writer thread,
+    // so that would need an extra copy.
+    // Anyway, first of all, lets see how all this behaves with a slow disk
+    // before we prematurely optimize....
+
+    // TODO: Examine how this behaves on an oldschool HDD with shitty access
+    // times. Maybe there's a case to be made to copy as much as possible
+    // in a single operation rather than always copying a single block.
+    // TODO: Extra case to test: slow hdd + slow network
+
     /*
     let download_task = tokio::task::spawn(download_blocks_in_thread(
         target_file.try_clone()?,
@@ -239,20 +258,19 @@ async fn update_image(
         }
     }
 
-    println!("Finished copying unchanged blocks, waiting for download to finish");
+    println!("Now downloading changed blocks");
 
     download_blocks_in_thread(
-        target_file.try_clone()?,
+        target_file,
         downloads.to_vec(),
         new_image_url.to_string(),
     )
     .await?;
 
-    // FIXME: see comment above
+    // FIXME: see commented out part above
     //let () = download_task.await??;
 
     // We'll do a hash of the data afterwards, which implies reading, so no need to flush and block here actually
-    //target_file.flush()?;
 
     Ok(())
 }

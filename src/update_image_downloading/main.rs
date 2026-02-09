@@ -297,7 +297,7 @@ fn delta_update_image(
 
     println!("Now checking sha256sum of updated image");
     let sha256sum = delta_manifest::measure_sha256sum(image_to_update)?;
-    if sha256sum != new_image_manifest.image_hash {
+    if sha256sum != *new_image_manifest.image_hash {
         return Err("sha256sum of updated image doesn't match the one from manifest".into());
     }
 
@@ -306,7 +306,7 @@ fn delta_update_image(
         "Now creating new verity image: \"{}\"",
         verity_image_filename
     );
-    let root_hash = create_verity_image(
+   /* let root_hash = create_verity_image(
         image_to_update,
         verity_image_filename,
         new_image_manifest.verity_salt,
@@ -314,7 +314,7 @@ fn delta_update_image(
     print!("dm-verity root hash: ");
     for byte in root_hash {
         print!("{:02x}", byte);
-    }
+    }*/
     print!("\n");
 
     Ok(())
