@@ -35,6 +35,10 @@ path = "src/varlink_test_server_client/test_pull_client.rs"
 name = "updater_prototype"
 path = "src/updater_prototype/main.rs"
 
+[[bin]]
+name = "manifest_backwards_compat_tests"
+path = "src/manifest_backwards_compat_tests/main.rs"
+
 [dependencies]
 bytes = "1.11.0"
 crc-fast = "1.8.0"
