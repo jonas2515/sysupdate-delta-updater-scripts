@@ -17,10 +17,13 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 use std::num::ParseIntError;
+use std::fs::OpenOptions;
 use std::{env, fs::File, io::Read, os::fd::AsRawFd, os::fd::OwnedFd, path::PathBuf, process};
+use std::os::fd::RawFd;
 use tokio::fs::remove_file;
 use uuid::Uuid;
 use zlink::{Listener, Reply, ReplyError, unix};
+use memfd;
 
 use sysupdate_delta_updater_scripts::delta_manifest;
 
@@ -39,62 +42,56 @@ Spawn a varlink server as the https+delta backend in
 fn copy_block(
     mut source: &File,
     source_offset_bytes: usize,
-    source_size_bytes: usize,
-    source_block_num: u64,
     mut target: &File,
-    target_block_num: u64,
+    target_offset_bytes: usize,
 ) -> Result<(), Box<dyn Error>> {
-    assert!(
-        (source_offset_bytes as u64
-            + (source_block_num * delta_manifest::BLOCK_SIZE as u64)
-            + delta_manifest::BLOCK_SIZE as u64)
-            <= (source_offset_bytes + source_size_bytes) as u64
-    );
-
-    source.seek(SeekFrom::Start(
-        source_offset_bytes as u64 + (source_block_num * delta_manifest::BLOCK_SIZE as u64),
-    ))?;
+    source.seek(SeekFrom::Start(source_offset_bytes as u64))?;
     let mut source_take = source.take(delta_manifest::BLOCK_SIZE as u64);
 
-    target.seek(std::io::SeekFrom::Start(
-        target_block_num * delta_manifest::BLOCK_SIZE as u64,
-    ))?;
+    target.seek(SeekFrom::Start(target_offset_bytes as u64))?;
 
     std::io::copy(&mut source_take, &mut target)?;
 
     Ok(())
 }
 
-async fn download_blocks_multipart(
-    client: &Client,
-    mut target: &File,
-    downloads: &[(usize, u64)],
+async fn download_and_update_blocks_multirange(
+    http_client: &Client,
+    mut target_file: &File,
+    target_offset_bytes: usize,
+    ranges_to_download: &[(usize, u64)],
     url: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let mut header = "bytes=".to_string();
-
-    for (offset, n_chunks) in downloads {
-        if header != "bytes=" {
-            header.push_str(",");
-        }
+    // First put together the Range header, it will look something like this:
+    // Range: bytes=0-5,40-50
+    let mut range_header = "bytes=".to_string();
+    for (offset, n_chunks) in ranges_to_download {
         let start_bytes: u64 = *offset as u64 * (delta_manifest::BLOCK_SIZE as u64);
         let end_bytes: u64 = start_bytes + ((delta_manifest::BLOCK_SIZE as u64) * n_chunks) - 1;
 
-        header.push_str(&format!("{}-{}", start_bytes, end_bytes));
+        range_header.push_str(&format!("{}-{},", start_bytes, end_bytes));
     }
+    // Remove the trailing "," char
+    range_header.pop();
 
-    let response = client.get(url).header("Range", header).send().await?;
+    // Fire off the HTTP range request
+    let response = http_client.get(url).header("Range", range_header).send().await?;
     if !response.status().is_success() {
         let code = response.status();
         return Err(format!("Delta download failed (HTTP status: {code})").into());
     }
 
+    // Now things are getting fun, parse the Content-Type header from the response ...
     let content_type_header = response
         .headers()
         .get(CONTENT_TYPE)
         .and_then(|h| h.to_str().ok());
 
+    // ... and if it's a multi-range header (looking like this
+    // `Content-Type: multipart/byteranges; boundary=3d6b6a416f9b5`) ...
     if content_type_header.is_some_and(|h| h.contains("multipart/byteranges")) {
+        // ... extract the boundary string (the divider that marks the beginning/end
+        // of ranges in the stream) ...
         let boundary_str = content_type_header
             .unwrap()
             .split("boundary=")
@@ -103,45 +100,58 @@ async fn download_blocks_multipart(
             .trim();
         let boundary_as_u8 = boundary_str.as_bytes().to_vec();
 
-        let mut stream = MultipartStream::new(response.bytes_stream(), &*boundary_as_u8);
-        let mut downloads_iter = downloads.into_iter();
+        // ... and pass it to MultipartStream to identify ranges for us.
+        let mut ranges_stream = MultipartStream::new(response.bytes_stream(), &*boundary_as_u8);
+        let mut ranges_to_download_iter = ranges_to_download.into_iter();
 
-        while let Some((offset, n_chunks)) = downloads_iter.next()
-            && let Some(Ok(part)) = stream.next().await
+        // Then loop through the ranges we receive and at the same time
+        // through the ranges_to_download array (which is supposed to have one
+        // entry for each range that we receive, in the same order as well) ...
+        while let Some(Ok(part)) = ranges_stream.next().await
+            && let Some((range_offset, range_n_chunks)) = ranges_to_download_iter.next()
         {
-            target.seek(SeekFrom::Start(
-                *offset as u64 * delta_manifest::BLOCK_SIZE as u64,
-            ))?;
+            let range_offset_bytes = target_offset_bytes + *range_offset * delta_manifest::BLOCK_SIZE;
+            let range_size_bytes = *range_n_chunks as usize * delta_manifest::BLOCK_SIZE;
 
-            let mut current_bytes_downloaded = 0;
+            // ... and for each new range, seek to the offset in our target file ...
+            target_file.seek(SeekFrom::Start(range_offset_bytes as u64))?;
+
+            // ... and stream the range into the file bit by bit ...
+            let mut range_bytes_downloaded = 0;
             let mut body = part.body();
             while let Ok(Some(b)) = body.try_next().await {
-                current_bytes_downloaded += b.len();
-                if current_bytes_downloaded > *n_chunks as usize * delta_manifest::BLOCK_SIZE {
+                range_bytes_downloaded += b.len();
+                // ... while carefully ensuring that the downloaded range is not
+                // larger than it should be.
+                if range_bytes_downloaded > range_size_bytes {
                     return Err("Too many bytes received in download".into());
                 }
 
-                target.write_all(&*b)?;
+                target_file.write_all(&*b)?;
             }
         }
+    // ... if we only requested a single range, we'll get either no Content-Type
+    // header or `Content-Type: application/octet-stream` ...
     } else if content_type_header.is_none_or(|h| h == "application/octet-stream") {
-        assert!(downloads.len() == 1);
-        let (offset, n_chunks) = downloads[0];
+        // ... make sure that a single range is actually what we requested ...
+        assert!(ranges_to_download.len() == 1);
 
-        target.seek(SeekFrom::Start(
-            offset as u64 * delta_manifest::BLOCK_SIZE as u64,
-        ))?;
+        let (range_offset, range_n_chunks) = ranges_to_download[0];
+        let range_offset_bytes = target_offset_bytes + range_offset * delta_manifest::BLOCK_SIZE;
+        let range_size_bytes = range_n_chunks as usize * delta_manifest::BLOCK_SIZE;
 
-        let mut current_bytes_downloaded = 0;
+        // ... and now stream the range into the file the same way as we do above.
+        target_file.seek(SeekFrom::Start(range_offset_bytes as u64))?;
+
+        let mut range_bytes_downloaded = 0;
         let mut stream = response.bytes_stream();
         while let Some(Ok(b)) = stream.next().await {
-            current_bytes_downloaded += b.len();
-            if current_bytes_downloaded > n_chunks as usize * delta_manifest::BLOCK_SIZE {
+            range_bytes_downloaded += b.len();
+            if range_bytes_downloaded > range_size_bytes {
                 return Err("Too many bytes received in download".into());
             }
 
-            //tokio::spawn(target.write_all(&*b));
-            target.write_all(&*b)?;
+            target_file.write_all(&*b)?;
         }
     } else {
         return Err("Delta download returned wrong content type".into());
@@ -150,8 +160,9 @@ async fn download_blocks_multipart(
     Ok(())
 }
 
-async fn download_blocks_in_thread(
-    target: &File,
+async fn download_and_update_blocks(
+    target_file: File,
+    target_offset_bytes: usize,
     downloads: Vec<(usize, u64)>,
     url: String,
 ) -> Result<(), std::io::Error> {
@@ -162,40 +173,54 @@ async fn download_blocks_in_thread(
     //let client = reqwest::ClientBuilder::new().use_rustls_tls().build().unwrap();
     let client = reqwest::Client::new();
 
-    let mut i = 0;
-    while i < downloads.len() {
-        let end_cur_range = min(i + N_RANGES_PER_DOWNLOAD, downloads.len());
+    let mut cur_range = 0;
+    while cur_range < downloads.len() {
+        let last_range = min(cur_range + N_RANGES_PER_DOWNLOAD, downloads.len());
 
-        match download_blocks_multipart(&client, &target, &downloads[i..end_cur_range], &url).await
+        if let Err(error) = download_and_update_blocks_multirange(&client, &target_file, target_offset_bytes, &downloads[cur_range..last_range], &url).await
         {
-            Err(error) => {
-                return Err(std::io::Error::other(format!(
-                    "Failure to download range: {}",
-                    error
-                )));
-            }
-            Ok(()) => {}
+            return Err(std::io::Error::other(format!(
+                "Failure to download range: {}",
+                error
+            )));
         }
 
-        i = i + N_RANGES_PER_DOWNLOAD;
+        cur_range = cur_range + N_RANGES_PER_DOWNLOAD;
     }
+
+    target_file.sync_data()?;
 
     Ok(())
 }
 
-async fn update_image(
+fn clone_file_for_thread(
+    existing_file: &File,
+) -> Result<File, std::io::Error> {
+    // So apparently if you open() the FD in /proc/self/fd a second time, you can
+    // actually write to the file from a second thread and that won't mess with
+    // the writes from the existing thread.
+    //
+    // File.try_clone() doesn't work like that actually and, but if we
+    // open() again ourselves, that works fine.
+    let target_fd_path = PathBuf::from(format!("/proc/self/fd/{}", existing_file.as_raw_fd()));
+
+    OpenOptions::new().write(true).open(&target_fd_path)
+}
+
+async fn update_image_with_block_mapping(
     old_image_file: &File,
     old_image_offset_bytes: usize,
     old_image_size_bytes: usize,
     target_file: &File,
+    target_offset_bytes: usize,
     new_image_url: &str,
-    blocks_to_update: Vec<u64>,
+    new_blocks_to_old_blocks: Vec<u64>,
 ) -> Result<(), Box<dyn Error>> {
     let mut n_chunks_cur_download = 0;
     let mut begin_block_cur_download = 0;
-    let mut downloads = Vec::new();
+    let mut ranges_to_download = Vec::new();
 
-    for (target_block_num, source_block_num) in blocks_to_update.iter().enumerate() {
+    for (target_block_num, source_block_num) in new_blocks_to_old_blocks.iter().enumerate() {
         if *source_block_num == u64::MAX {
             if n_chunks_cur_download == 0 {
                 begin_block_cur_download = target_block_num;
@@ -205,72 +230,56 @@ async fn update_image(
             }
         } else {
             if n_chunks_cur_download > 0 {
-                downloads.push((begin_block_cur_download, n_chunks_cur_download));
+                ranges_to_download.push((begin_block_cur_download, n_chunks_cur_download));
                 n_chunks_cur_download = 0;
             }
         }
     }
 
     if n_chunks_cur_download > 0 {
-        downloads.push((begin_block_cur_download, n_chunks_cur_download));
+        ranges_to_download.push((begin_block_cur_download, n_chunks_cur_download));
     }
 
-    println!("Now copying unchanged blocks");
-
-    // TODO: There's potential for optimization here by parallelizing writing
-    // to disk and downloading. Ideally we'd start downloading right now, and
-    // copy from old to new image at the same time. Also ideally writing
-    // downloaded data to disk would not block downloading, this would get
-    // trickier though, because then we start caching downloaded data in memory,
-    // and we should probably keep the amount of memory used low.
-    // The former can fairly easily be achieved by putting downloading into a
-    // thread and making writing to the FD from main vs download thread
-    // exclusive using mutexes.
-    // The latter not so easy, likely the downloaded buffer is going to be
-    // reused and we can't just hand ownership over to some writer thread,
-    // so that would need an extra copy.
-    // Anyway, first of all, lets see how all this behaves with a slow disk
-    // before we prematurely optimize....
-
-    // TODO: Examine how this behaves on an oldschool HDD with shitty access
-    // times. Maybe there's a case to be made to copy as much as possible
-    // in a single operation rather than always copying a single block.
-    // TODO: Extra case to test: slow hdd + slow network
-
-    /*
-    let download_task = tokio::task::spawn(download_blocks_in_thread(
-        target_file.try_clone()?,
-        downloads.to_vec(),
+    // As an optimization we start downloading right now in an async task, and
+    // copy from the old to the new image at the same time.
+    //
+    // Also ideally writing downloaded data to disk would not block downloading.
+    // For that we trust the kernel to do its caching thing though, it should
+    // pretty much do this for us already.
+    println!("Now copying unchanged blocks and downloading changed ones");
+    let download_task = tokio::task::spawn(download_and_update_blocks(
+        clone_file_for_thread(target_file)?,
+        target_offset_bytes,
+        ranges_to_download.to_vec(),
         new_image_url.to_string(),
     ));
-    */
 
-    for (target_block_num, source_block_num) in blocks_to_update.iter().enumerate() {
+    for (target_block_num, source_block_num) in new_blocks_to_old_blocks.iter().enumerate() {
         if *source_block_num != u64::MAX {
+            let source_offset_bytes = old_image_offset_bytes
+                + (*source_block_num as usize * delta_manifest::BLOCK_SIZE);
+            assert!(
+                (source_offset_bytes + delta_manifest::BLOCK_SIZE)
+                    <= (old_image_offset_bytes + old_image_size_bytes)
+            );
+
+            let copy_target_offset_bytes = target_offset_bytes
+                + target_block_num * delta_manifest::BLOCK_SIZE;
+
             copy_block(
                 &old_image_file,
-                old_image_offset_bytes,
-                old_image_size_bytes,
-                *source_block_num,
+                source_offset_bytes,
                 &target_file,
-                target_block_num as u64,
+                copy_target_offset_bytes,
             )?;
         }
     }
 
-    println!("Now downloading changed blocks");
+    download_task.await??;
 
-    download_blocks_in_thread(
-        target_file,
-        downloads.to_vec(),
-        new_image_url.to_string(),
-    )
-    .await?;
-
-    // FIXME: see commented out part above
-    //let () = download_task.await??;
-
-    // We'll do a hash of the data afterwards, which implies reading, so no need to flush and block here actually
+    // Adrian says we still need to sync the data, even though we read back
+    // afterwards (the kernel always lies)
+    target_file.sync_data()?;
 
     Ok(())
 }
@@ -296,35 +305,46 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
         .collect()
 }
 
+fn new_sealed_size_memfd(memfd_size_bytes: usize) -> Result<memfd::Memfd, Box<dyn std::error::Error>> {
+    let opts = memfd::MemfdOptions::default().allow_sealing(true);
+    let mfd = opts.create("memfd-fixed-size-for-dm-verity")?;
+
+    mfd.as_file().set_len(memfd_size_bytes as u64)?;
+
+    mfd.add_seals(&[
+        memfd::FileSeal::SealShrink,
+        memfd::FileSeal::SealGrow
+    ])?;
+
+    mfd.add_seal(memfd::FileSeal::SealSeal)?;
+
+    Ok(mfd)
+}
+
 fn create_verity_image(
-    target_file: &File,
-    target_offset_bytes: usize,
-    target_size_bytes: usize,
-    verity_offset_bytes: usize,
+    data_file: &File,
+    data_offset_bytes: usize,
+    data_size_bytes: usize,
+    verity_fd: RawFd,
     verity_salt: [u8; 32],
 ) -> Result<[u8; 32], Box<dyn Error>> {
-    let target_fd = target_file.as_raw_fd();
-    let destination_path = PathBuf::from(format!("/proc/self/fd/{}", target_fd));
-    let hash_device_path = destination_path.clone();
+    let data_path = PathBuf::from(format!("/proc/self/fd/{}", data_file.as_raw_fd()));
+    let hash_device_path = PathBuf::from(format!("/proc/self/fd/{}", verity_fd));
 
     // FIXME: currently it's impossible to pass an offset for the data to dm-verity
-    if target_offset_bytes != 0 {
-        return Err(
-            "Offset in the target image passed, dm-verity can't read data at an offset".into(),
-        );
-    }
+    assert!(data_offset_bytes == 0);
 
     let params = CryptParamsVerity {
         hash_name: "sha256".to_string(),
-        data_device: destination_path,
+        data_device: data_path,
         hash_device: None,
         fec_device: None,
         salt: Vec::from(verity_salt),
         hash_type: 1,
         data_block_size: 4096, // supposed to be partition sector size
         hash_block_size: 4096, // supposed to be partition sector size
-        data_size: target_size_bytes as u64 / 4096, // this is actually the veritysetup --data-blocks option, so it'll be multiplied by data_block_size
-        hash_area_offset: verity_offset_bytes as u64,
+        data_size: data_size_bytes as u64 / 4096, // this is actually the veritysetup --data-blocks option, so it'll be multiplied by data_block_size
+        hash_area_offset: 0,
         fec_area_offset: 0,
         fec_roots: 0,
         flags: CryptVerity::CREATE_HASH,
@@ -400,13 +420,13 @@ async fn delta_update_image(
     old_image_size_bytes: usize,
     target_fd: OwnedFd,
     target_offset_bytes: usize,
-    target_max_size_bytes: usize,
+    target_size_bytes: usize,
     checksum: Option<[u8; 32]>,
     new_image_url: &str,
     new_image_manifest_url: &str,
 ) -> Result<(), Box<dyn Error>> {
     let old_image_file = File::from(old_image_fd);
-    let target_file = File::from(target_fd);
+    let mut target_file = File::from(target_fd);
 
     println!("Reading old image to get block hashes");
     let old_image_block_hashes = delta_manifest::read_image_block_hashes_from_file(
@@ -427,7 +447,7 @@ async fn delta_update_image(
         );
 
     let n_blocks_new_image = new_blocks_to_old_blocks.len();
-    let target_size_bytes = n_blocks_new_image * delta_manifest::BLOCK_SIZE;
+    let new_image_size_bytes = n_blocks_new_image * delta_manifest::BLOCK_SIZE;
 
     println!(
         "Percentage of blocks avail from existing image: {}",
@@ -440,56 +460,72 @@ async fn delta_update_image(
             / 1024
     );
 
-    let verity_data_size_bytes = calculate_verity_size(target_size_bytes);
-    let final_size_bytes = target_size_bytes + verity_data_size_bytes;
+    let verity_data_size_bytes = calculate_verity_size(new_image_size_bytes);
+    let final_size_bytes = new_image_size_bytes + verity_data_size_bytes;
     println!(
         "Final image size will be: {} (image) + {} (verity) = {} bytes",
-        target_size_bytes, verity_data_size_bytes, final_size_bytes
+        new_image_size_bytes, verity_data_size_bytes, final_size_bytes
     );
-    if final_size_bytes > target_max_size_bytes {
+    if final_size_bytes > target_size_bytes {
         return Err(format!(
-            "Final image size will be larger than max size ({target_max_size_bytes} bytes)"
+            "Final image size will be larger than max size ({target_size_bytes} bytes)"
         )
         .into());
     }
 
-    // Now that we know the final size will not exceed target_max_size_bytes, we
-    // continue without size checks when writing to the target. This means:
-    // 1) For copying from the existing image to the target image, we're good,
-    // because that's using new_blocks_to_old_blocks array, which we just checked
-    // in the final_size_bytes check.
-    // 2) For the multipart-range download we, use the downloads array in update_image
-    // and then make sure the downloads are not larger than the individual ranges
-    // in the array.
-    // 3) We trust dm-verity to not write more data than what we calculated
-    // ourselves above.
-
-    update_image(
+    // Now that we know the final size will not exceed target_size_bytes, we
+    // start writing to the target. This means:
+    //
+    // 1) For copying from the existing image to the target image, we won't exceed
+    // it, because that's simply reading the new_blocks_to_old_blocks array, which
+    // we just checked in the final_size_bytes check (new_image_size_bytes is derived
+    // from new_blocks_to_old_blocks).
+    // 2) For the blocks that we download, we create the ranges_to_download array
+    // (again by reading the new_blocks_to_old_blocks array) and then make sure the
+    // range-downloads don't exceed the size of the ranges in ranges_to_download.
+    //
+    // -> There's no need to pass target_size_bytes here.
+    update_image_with_block_mapping(
         &old_image_file,
         old_image_offset_bytes,
         old_image_size_bytes,
         &target_file,
+        target_offset_bytes,
         new_image_url,
         new_blocks_to_old_blocks,
     )
     .await?;
 
-    println!("Now creating checksum of updated image");
-    let sha256sum = measure_sha256sum(&target_file, target_offset_bytes, target_size_bytes)?;
+    if checksum.is_some() {
+        println!("Now creating and validating checksum of updated image");
+    } else {
+        println!("Now creating checksum of updated image (without validating)");
+    }
+    let sha256sum = measure_sha256sum(&target_file, target_offset_bytes, new_image_size_bytes)?;
     if checksum.is_some_and(|c| c != sha256sum) {
         return Err("sha256sum of updated image doesn't match the one we got passed".into());
     }
 
+    // ... 3) For dm-verity we do another special thing: To ensure that dm-verity
+    // doesn't misbehave and write more data than what we calculated above, we
+    // create a memfd with the calculated verity_data_size_bytes and pass dm-verity
+    // the FD to that memfd.
     println!("Now creating new verity data, using image checksum as salt");
+    let verity_memfd = new_sealed_size_memfd(verity_data_size_bytes)?;
     let verity_salt = sha256sum;
+    let verity_offset_bytes = target_offset_bytes + new_image_size_bytes;
+
     let root_hash = create_verity_image(
         &target_file,
         target_offset_bytes,
-        target_size_bytes,
-        target_offset_bytes + target_size_bytes,
+        new_image_size_bytes,
+        verity_memfd.as_raw_fd(),
         verity_salt,
     )?;
     print_hexarray("dm-verity root hash: ", &root_hash);
+
+    target_file.seek(SeekFrom::Start(verity_offset_bytes as u64))?;
+    std::io::copy(&mut verity_memfd.into_file(), &mut target_file)?;
 
     Ok(())
 }
@@ -636,7 +672,13 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let target_fd = fds.remove(0);
             let target_offset_bytes = offset.unwrap_or(0) as usize;
-            let target_max_size_bytes = maxSize.unwrap() as usize;
+            let target_size_bytes = maxSize.unwrap() as usize;
+
+            if target_offset_bytes != 0 {
+                return Err(
+                    "Offset in the target image passed, dm-verity can't read data at an offset".into(),
+                );
+            }
 
             let old_image_fd = fds.remove(0);
             let old_image_offset_bytes = 0;
@@ -655,7 +697,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
                 old_image_size_bytes,
                 target_fd,
                 target_offset_bytes,
-                target_max_size_bytes,
+                target_size_bytes,
                 checksum,
                 source,
                 &format!("{source}.manifest"),
