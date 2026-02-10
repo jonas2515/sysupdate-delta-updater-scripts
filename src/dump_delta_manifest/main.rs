@@ -15,17 +15,6 @@ Dump the data from a delta update manifest file <manifest>."
 fn dump_manifest(manifest_filename: &str) -> Result<(), Box<dyn Error>> {
     let manifest = delta_manifest::read_manifest(manifest_filename)?;
 
-    println!("version: {:?}", manifest.version);
-    print!("salt: ");
-    for byte in manifest.verity_salt {
-        print!("{:x}", byte);
-    }
-    print!("\n");
-    print!("sha256hash of image: ");
-    for byte in manifest.image_hash {
-        print!("{:x}", byte);
-    }
-    print!("\n");
     println!("number of hash blocks: {}", manifest.block_hashes.len());
 
     Ok(())

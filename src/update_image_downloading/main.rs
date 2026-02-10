@@ -295,12 +295,6 @@ fn delta_update_image(
         new_blocks_to_old_blocks,
     )?;
 
-    println!("Now checking sha256sum of updated image");
-    let sha256sum = delta_manifest::measure_sha256sum(image_to_update)?;
-    if sha256sum != *new_image_manifest.image_hash {
-        return Err("sha256sum of updated image doesn't match the one from manifest".into());
-    }
-
     let verity_image_filename = &format!("{image_to_update}.verity");
     println!(
         "Now creating new verity image: \"{}\"",

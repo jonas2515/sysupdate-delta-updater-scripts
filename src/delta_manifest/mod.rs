@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use crc_fast::{CrcAlgorithm::Crc64Nvme, checksum};
-use gvariant::{Marker, Structure, aligned_bytes::copy_to_align, gv};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
@@ -8,105 +7,37 @@ use std::io;
 use std::io::SeekFrom;
 use std::io::{Read, Seek};
 use std::process::Command;
-use zvariant::{serialized::Context, serialized::Data, to_bytes, Type, LE};
+use zvariant::{serialized::Context, serialized::Data, to_bytes, as_value, Type, LE, signature};
 
 pub const BLOCK_SIZE: usize = 4096;
-/*
-pub struct Manifest {
-    pub version: u32,           /* manifest version */
-    pub verity_salt: [u8; 32],  /* salt to use for dm-verity */
-    pub image_hash: [u8; 32],   /* sha256 hash of the image (unsalted) */
-    pub block_hashes: Vec<u64>, /* block hashes crc64 */
-}*/
 
 use serde::{Deserialize, Serialize};
 use rmp_serde::{Deserializer, Serializer};
 
-#[derive(Deserialize, Serialize, Type, PartialEq, Debug)]
-pub struct ManifestV1 {
-    pub version: u32,           /* manifest version */
-    pub verity_salt: Vec<u8>,  /* salt to use for dm-verity, 32 bytes */
-    pub image_hash: Vec<u8>,   /* sha256 hash of the image (unsalted), 32 bytes */
-    pub block_hashes: Vec<u64>, /* block hashes crc64 */
-}
-
-pub type Manifest = ManifestV1;
-
-
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "version")]
-enum ManifestRaw {
-   V1(ManifestV1),
-   #[serde(other)]
-   Unknown
-}
-
-fn check_manifest_version(manifest_version: &[u8]) -> Result<(), Box<dyn Error>> {
-    assert!(manifest_version.len() == 4);
-    let buffer = copy_to_align(manifest_version);
-    let manifest_version = gv!("u").cast(&buffer);
-    if *manifest_version != 1 {
-        return Err(format!("Unsupported manifest version: {}", manifest_version).into());
-    }
-
-    Ok(())
-}
-
-#[derive(Debug, Serialize, Deserialize, Type, PartialEq)]
-struct MyStruct {
-    id: u32,
-    name: String,
+#[derive(Debug, PartialEq, Type, Eq, Serialize, Deserialize)]
+#[zvariant(signature = "a{sv}")]
+pub struct Manifest {
+    #[serde(with = "as_value")]
+    pub block_hashes: Vec<u64>,
 }
 
 pub fn read_manifest(manifest_filename: &str) -> Result<Manifest, Box<dyn Error>> {
-    // read the first 4 bytes of the file first as a simple, forward-compatible version check
-    // FIXME: I think this shouldn't cause problems with endianness etc, but not 100% sure
-//    let mut manifest_file = File::open(manifest_filename)?;
+    let serialize_context = Context::new_gvariant(LE, 0);
+
     let bytes = std::fs::read(manifest_filename)?;
+    let bytes = Data::new(bytes, serialize_context);
 
- let ctxt = Context::new_gvariant(LE, 0);
-    let bytes_data = Data::new(bytes, ctxt);
-    //let manifest = bytes.deserialize()?.0;
+    let (manifest, _) = bytes.deserialize()?;
 
-
-    let (manifest, _) = bytes_data.deserialize()?;
-
-/*
-    let mut buffer = [0u8; 4];
-    let bytes_read = manifest_file.read(&mut buffer)?;
-    if bytes_read != 4 {
-        return Err("Failed to read manifest version".into());
-    }
-    check_manifest_version(&buffer)?;
-
-    manifest_file.rewind()?;
-
-    let variant = gv!("(uayayat)").deserialize(manifest_file)?;
-    let manifest_as_tuple = variant.to_tuple();
-
-    let manifest = ManifestV1 {
-        version: *manifest_as_tuple.0,
-        verity_salt: manifest_as_tuple.1.try_into()?,
-        image_hash: manifest_as_tuple.2.try_into()?,
-        block_hashes: manifest_as_tuple.3.to_vec(),
-    };
-*/
     Ok(manifest)
 }
 
 pub fn read_manifest_bytes(manifest_bytes: Bytes) -> Result<Manifest, Box<dyn Error>> {
-    check_manifest_version(&manifest_bytes[0..4])?;
+    let serialize_context = Context::new_gvariant(LE, 0);
 
-    let buffer = copy_to_align(&manifest_bytes);
-    let variant = gv!("(uayayat)").cast(&buffer);
-    let manifest_as_tuple = variant.to_tuple();
+    let bytes = Data::new(&*manifest_bytes, serialize_context);
 
-    let manifest = ManifestV1 {
-        version: *manifest_as_tuple.0,
-        verity_salt: manifest_as_tuple.1.try_into()?,
-        image_hash: manifest_as_tuple.2.try_into()?,
-        block_hashes: manifest_as_tuple.3.to_vec(),
-    };
+    let (manifest, _) = bytes.deserialize()?;
 
     Ok(manifest)
 }
