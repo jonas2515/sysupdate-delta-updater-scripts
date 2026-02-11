@@ -7,12 +7,12 @@ use std::io;
 use std::io::SeekFrom;
 use std::io::{Read, Seek};
 use std::process::Command;
-use zvariant::{serialized::Context, serialized::Data, to_bytes, as_value, Type, LE, signature};
+use zvariant::{LE, Type, as_value, serialized::Context, serialized::Data, signature, to_bytes};
 
 pub const BLOCK_SIZE: usize = 4096;
 
-use serde::{Deserialize, Serialize};
 use rmp_serde::{Deserializer, Serializer};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Type, Eq, Serialize, Deserialize)]
 #[zvariant(signature = "a{sv}")]

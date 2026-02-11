@@ -5,6 +5,7 @@ use libcryptsetup_rs::{
     CryptInit, CryptParamsVerity, CryptParamsVerityRef,
     consts::{flags::CryptVerity, vals::EncryptionFormat},
 };
+use memfd;
 use multipart_async_stream::{
     LendingIterator, MultipartStream, TryStreamExt, header::CONTENT_TYPE,
 };
@@ -13,17 +14,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cmp::min;
 use std::error::Error;
+use std::fs::OpenOptions;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 use std::num::ParseIntError;
-use std::fs::OpenOptions;
-use std::{env, fs::File, io::Read, os::fd::AsRawFd, os::fd::OwnedFd, path::PathBuf, process};
 use std::os::fd::RawFd;
+use std::{env, fs::File, io::Read, os::fd::AsRawFd, os::fd::OwnedFd, path::PathBuf, process};
 use tokio::fs::remove_file;
 use uuid::Uuid;
 use zlink::{Listener, Reply, ReplyError, unix};
-use memfd;
 
 use sysupdate_delta_updater_scripts::delta_manifest;
 
@@ -75,7 +75,11 @@ async fn download_and_update_blocks_multirange(
     range_header.pop();
 
     // Fire off the HTTP range request
-    let response = http_client.get(url).header("Range", range_header).send().await?;
+    let response = http_client
+        .get(url)
+        .header("Range", range_header)
+        .send()
+        .await?;
     if !response.status().is_success() {
         let code = response.status();
         return Err(format!("Delta download failed (HTTP status: {code})").into());
@@ -110,7 +114,8 @@ async fn download_and_update_blocks_multirange(
         while let Some(Ok(part)) = ranges_stream.next().await
             && let Some((range_offset, range_n_chunks)) = ranges_to_download_iter.next()
         {
-            let range_offset_bytes = target_offset_bytes + *range_offset * delta_manifest::BLOCK_SIZE;
+            let range_offset_bytes =
+                target_offset_bytes + *range_offset * delta_manifest::BLOCK_SIZE;
             let range_size_bytes = *range_n_chunks as usize * delta_manifest::BLOCK_SIZE;
 
             // ... and for each new range, seek to the offset in our target file ...
@@ -177,7 +182,14 @@ async fn download_and_update_blocks(
     while cur_range < downloads.len() {
         let last_range = min(cur_range + N_RANGES_PER_DOWNLOAD, downloads.len());
 
-        if let Err(error) = download_and_update_blocks_multirange(&client, &target_file, target_offset_bytes, &downloads[cur_range..last_range], &url).await
+        if let Err(error) = download_and_update_blocks_multirange(
+            &client,
+            &target_file,
+            target_offset_bytes,
+            &downloads[cur_range..last_range],
+            &url,
+        )
+        .await
         {
             return Err(std::io::Error::other(format!(
                 "Failure to download range: {}",
@@ -193,9 +205,7 @@ async fn download_and_update_blocks(
     Ok(())
 }
 
-fn clone_file_for_thread(
-    existing_file: &File,
-) -> Result<File, std::io::Error> {
+fn clone_file_for_thread(existing_file: &File) -> Result<File, std::io::Error> {
     // So apparently if you open() the FD in /proc/self/fd a second time, you can
     // actually write to the file from a second thread and that won't mess with
     // the writes from the existing thread.
@@ -256,15 +266,15 @@ async fn update_image_with_block_mapping(
 
     for (target_block_num, source_block_num) in new_blocks_to_old_blocks.iter().enumerate() {
         if *source_block_num != u64::MAX {
-            let source_offset_bytes = old_image_offset_bytes
-                + (*source_block_num as usize * delta_manifest::BLOCK_SIZE);
+            let source_offset_bytes =
+                old_image_offset_bytes + (*source_block_num as usize * delta_manifest::BLOCK_SIZE);
             assert!(
                 (source_offset_bytes + delta_manifest::BLOCK_SIZE)
                     <= (old_image_offset_bytes + old_image_size_bytes)
             );
 
-            let copy_target_offset_bytes = target_offset_bytes
-                + target_block_num * delta_manifest::BLOCK_SIZE;
+            let copy_target_offset_bytes =
+                target_offset_bytes + target_block_num * delta_manifest::BLOCK_SIZE;
 
             copy_block(
                 &old_image_file,
@@ -305,16 +315,15 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
         .collect()
 }
 
-fn new_sealed_size_memfd(memfd_size_bytes: usize) -> Result<memfd::Memfd, Box<dyn std::error::Error>> {
+fn new_sealed_size_memfd(
+    memfd_size_bytes: usize,
+) -> Result<memfd::Memfd, Box<dyn std::error::Error>> {
     let opts = memfd::MemfdOptions::default().allow_sealing(true);
     let mfd = opts.create("memfd-fixed-size-for-dm-verity")?;
 
     mfd.as_file().set_len(memfd_size_bytes as u64)?;
 
-    mfd.add_seals(&[
-        memfd::FileSeal::SealShrink,
-        memfd::FileSeal::SealGrow
-    ])?;
+    mfd.add_seals(&[memfd::FileSeal::SealShrink, memfd::FileSeal::SealGrow])?;
 
     mfd.add_seal(memfd::FileSeal::SealSeal)?;
 
@@ -676,7 +685,8 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
 
             if target_offset_bytes != 0 {
                 return Err(
-                    "Offset in the target image passed, dm-verity can't read data at an offset".into(),
+                    "Offset in the target image passed, dm-verity can't read data at an offset"
+                        .into(),
                 );
             }
 

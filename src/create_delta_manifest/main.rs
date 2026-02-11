@@ -1,10 +1,10 @@
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::process;
-use zvariant::{serialized::Context, to_writer, LE};
 use std::io::Write;
+use std::process;
 use sysupdate_delta_updater_scripts::delta_manifest;
+use zvariant::{LE, serialized::Context, to_writer};
 
 fn help() {
     println!(

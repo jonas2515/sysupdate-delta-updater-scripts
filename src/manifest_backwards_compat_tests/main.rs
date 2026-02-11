@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 use zvariant::{
-    LE, to_bytes, serialized::Context, Type,
-    signature::{Signature, Fields},
-    SerializeDict, DeserializeDict,
+    DeserializeDict, LE, SerializeDict, Type, as_value,
+    serialized::Context,
     signature,
-    as_value,
+    signature::{Fields, Signature},
+    to_bytes,
 };
 
 fn main() {
@@ -50,7 +50,10 @@ fn main() {
     // deserializes fine to that type.
     let encoded = to_bytes(ctxt, &test_manifest_v2).unwrap();
     let decoded: Manifest = encoded.deserialize().unwrap().0;
-    assert_eq!(&decoded, &Manifest {
-        block_hashes: [0x186].to_vec(),
-    });
+    assert_eq!(
+        &decoded,
+        &Manifest {
+            block_hashes: [0x186].to_vec(),
+        }
+    );
 }

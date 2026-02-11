@@ -300,7 +300,7 @@ fn delta_update_image(
         "Now creating new verity image: \"{}\"",
         verity_image_filename
     );
-   /* let root_hash = create_verity_image(
+    /* let root_hash = create_verity_image(
         image_to_update,
         verity_image_filename,
         new_image_manifest.verity_salt,
